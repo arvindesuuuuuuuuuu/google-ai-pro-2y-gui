@@ -364,96 +364,183 @@ static bool path_check(const char *dir, const char *rel, int mode) {
     return access(full, mode) == 0;
 }
 
-void runner_detect_env(const char *repo_dir, G2yEnvStatus *out) {
+static bool has_remote_target(const G2yRemoteCfg *remote) {
+    return remote && remote->ssh_target && remote->ssh_target[0] != '\0';
+}
+
+static bool detect_local_adb(const char *repo_dir) {
+    if (repo_dir && *repo_dir && path_check(repo_dir, "tools/platform-tools/adb", X_OK)) {
+        return true;
+    }
+    const char *home = getenv("HOME");
+    if (home && path_check(home, "Android/Sdk/platform-tools/adb", X_OK)) {
+        return true;
+    }
+    gchar *sys_adb = g_find_program_in_path("adb");
+    if (sys_adb) {
+        g_free(sys_adb);
+        return true;
+    }
+    return false;
+}
+
+void runner_detect_env(const char *repo_dir, const G2yRemoteCfg *remote, G2yEnvStatus *out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));
-    if (!repo_dir || !*repo_dir) return;
+    out->has_adb = detect_local_adb(repo_dir);
 
+    if (has_remote_target(remote)) {
+        out->repo_ok = true;
+        out->has_agent = true;
+        out->has_venv = (!remote->ssh_sock || !remote->ssh_sock[0] ||
+                         access(remote->ssh_sock, F_OK) == 0);
+        return;
+    }
+
+    if (!repo_dir || !*repo_dir) return;
     out->repo_ok = path_check(repo_dir, "scripts/run.sh", X_OK) &&
                    path_check(repo_dir, "scripts/setup.sh", X_OK);
     out->has_venv = path_check(repo_dir, ".venv/bin/python", X_OK);
     out->has_agent = path_check(repo_dir, "agent/agent.iife.js", R_OK);
+}
 
-    if (path_check(repo_dir, "tools/platform-tools/adb", X_OK)) {
-        out->has_adb = true;
-    } else {
-        const char *home = getenv("HOME");
-        if (home && path_check(home, "Android/Sdk/platform-tools/adb", X_OK)) {
-            out->has_adb = true;
+static void append_sh_quoted(GString *dst, const char *s) {
+    g_string_append_c(dst, '\'');
+    for (const char *p = s ? s : ""; *p; p++) {
+        if (*p == '\'') {
+            g_string_append(dst, "'\\''");
         } else {
-            gchar *sys_adb = g_find_program_in_path("adb");
-            if (sys_adb) {
-                out->has_adb = true;
-                g_free(sys_adb);
-            }
+            g_string_append_c(dst, *p);
         }
+    }
+    g_string_append_c(dst, '\'');
+}
+
+static void append_remote_cd(GString *dst, const char *remote_repo) {
+    const char *repo = (remote_repo && *remote_repo) ? remote_repo : "google-ai-pro-2y";
+    g_string_append(dst, "cd ");
+    if (strcmp(repo, "~") == 0) {
+        g_string_append(dst, "\"$HOME\"");
+    } else if (strncmp(repo, "~/", 2) == 0) {
+        g_string_append(dst, "\"$HOME\"/");
+        append_sh_quoted(dst, repo + 2);
+    } else {
+        append_sh_quoted(dst, repo);
     }
 }
 
-char **runner_build_argv(const char *repo_dir, G2yAction action, G2yPlan plan,
-                         const char *account, bool open_app) {
-    if (!repo_dir || !*repo_dir) return NULL;
-    if (plan < 0 || plan >= G2Y_PLAN_COUNT) plan = G2Y_PLAN_ALL;
+static void build_script_args(GPtrArray *args, const char *base_dir,
+                              G2yAction action, G2yPlan plan,
+                              const char *account, bool open_app) {
     const PlanEntry *spec = &PLAN_TABLE[plan];
-
-    GPtrArray *args = g_ptr_array_new();
+    const char *prefix = (base_dir && *base_dir) ? base_dir : ".";
     char script_path[PATH_MAX + 32];
 
     if (action == G2Y_ACTION_SETUP) {
-        snprintf(script_path, sizeof(script_path), "%s/scripts/setup.sh", repo_dir);
+        snprintf(script_path, sizeof(script_path), "%s/scripts/setup.sh", prefix);
         g_ptr_array_add(args, g_strdup(script_path));
-    } else {
-        snprintf(script_path, sizeof(script_path), "%s/scripts/run.sh", repo_dir);
-        g_ptr_array_add(args, g_strdup(script_path));
+        return;
+    }
 
-        switch (action) {
-            case G2Y_ACTION_CHECK:
-                g_ptr_array_add(args, g_strdup("check"));
-                break;
-            case G2Y_ACTION_SHOW_PLANS:
-                g_ptr_array_add(args, g_strdup("scan"));
-                g_ptr_array_add(args, g_strdup("query"));
-                g_ptr_array_add(args, g_strdup("--timeout"));
-                g_ptr_array_add(args, g_strdup("10"));
-                g_ptr_array_add(args, g_strdup("--skus"));
-                for (size_t i = 0; i < spec->scan_sku_count; i++) {
-                    g_ptr_array_add(args, g_strdup(spec->scan_skus[i]));
-                }
-                break;
-            case G2Y_ACTION_PLAN:
+    snprintf(script_path, sizeof(script_path), "%s/scripts/run.sh", prefix);
+    g_ptr_array_add(args, g_strdup(script_path));
+
+    switch (action) {
+        case G2Y_ACTION_CHECK:
+            g_ptr_array_add(args, g_strdup("check"));
+            break;
+        case G2Y_ACTION_SHOW_PLANS:
+            g_ptr_array_add(args, g_strdup("scan"));
+            g_ptr_array_add(args, g_strdup("query"));
+            g_ptr_array_add(args, g_strdup("--timeout"));
+            g_ptr_array_add(args, g_strdup("10"));
+            g_ptr_array_add(args, g_strdup("--skus"));
+            for (size_t i = 0; i < spec->scan_sku_count; i++) {
+                g_ptr_array_add(args, g_strdup(spec->scan_skus[i]));
+            }
+            break;
+        case G2Y_ACTION_PLAN:
+            g_ptr_array_add(args, g_strdup("combo"));
+            g_ptr_array_add(args, g_strdup("plan"));
+            g_ptr_array_add(args, g_strdup("--device"));
+            if (account && *account) {
+                g_ptr_array_add(args, g_strdup("--account"));
+                g_ptr_array_add(args, g_strdup(account));
+            }
+            break;
+        case G2Y_ACTION_RUN:
+            if (strcmp(spec->run_cmd, "combo") == 0) {
                 g_ptr_array_add(args, g_strdup("combo"));
-                g_ptr_array_add(args, g_strdup("plan"));
+                g_ptr_array_add(args, g_strdup("run"));
                 g_ptr_array_add(args, g_strdup("--device"));
+                g_ptr_array_add(args, g_strdup("--execute"));
+                g_ptr_array_add(args, g_strdup("--yes"));
                 if (account && *account) {
                     g_ptr_array_add(args, g_strdup("--account"));
                     g_ptr_array_add(args, g_strdup(account));
                 }
-                break;
-            case G2Y_ACTION_RUN:
-                if (strcmp(spec->run_cmd, "combo") == 0) {
-                    g_ptr_array_add(args, g_strdup("combo"));
-                    g_ptr_array_add(args, g_strdup("run"));
-                    g_ptr_array_add(args, g_strdup("--device"));
-                    g_ptr_array_add(args, g_strdup("--execute"));
-                    g_ptr_array_add(args, g_strdup("--yes"));
-                    if (account && *account) {
-                        g_ptr_array_add(args, g_strdup("--account"));
-                        g_ptr_array_add(args, g_strdup(account));
-                    }
-                    if (open_app) {
-                        g_ptr_array_add(args, g_strdup("--open-app"));
-                    }
-                } else if (strncmp(spec->run_cmd, "step", 4) == 0) {
-                    g_ptr_array_add(args, g_strdup(spec->run_cmd));
-                } else {
-                    g_ptr_array_add(args, g_strdup("ultra"));
-                    g_ptr_array_add(args, g_strdup(spec->run_cmd));
+                if (open_app) {
+                    g_ptr_array_add(args, g_strdup("--open-app"));
                 }
-                break;
-            default:
-                break;
-        }
+            } else if (strncmp(spec->run_cmd, "step", 4) == 0) {
+                g_ptr_array_add(args, g_strdup(spec->run_cmd));
+            } else {
+                g_ptr_array_add(args, g_strdup("ultra"));
+                g_ptr_array_add(args, g_strdup(spec->run_cmd));
+            }
+            break;
+        default:
+            break;
     }
+}
+
+char **runner_build_argv(const char *repo_dir, const G2yRemoteCfg *remote,
+                         G2yAction action, G2yPlan plan,
+                         const char *account, bool open_app) {
+    if (plan < 0 || plan >= G2Y_PLAN_COUNT) plan = G2Y_PLAN_ALL;
+
+    if (has_remote_target(remote)) {
+        GPtrArray *inner = g_ptr_array_new();
+        build_script_args(inner, ".", action, plan, account, open_app);
+
+        const char *port = getenv("ANDROID_ADB_SERVER_PORT");
+        const char *serial = getenv("ADB_SERIAL");
+        const char *fhost = getenv("FRIDA_HOST");
+
+        GString *rcmd = g_string_new("stty -echo -onlcr 2>/dev/null; ");
+        append_remote_cd(rcmd, remote->remote_repo);
+        g_string_append(rcmd, " && ANDROID_ADB_SERVER_PORT=");
+        append_sh_quoted(rcmd, (port && *port) ? port : "15037");
+        g_string_append(rcmd, " ADB_SERIAL=");
+        append_sh_quoted(rcmd, (serial && *serial) ? serial : "emulator-5554");
+        g_string_append(rcmd, " FRIDA_HOST=");
+        append_sh_quoted(rcmd, (fhost && *fhost) ? fhost : "127.0.0.1:27042");
+        g_string_append(rcmd, " exec");
+        for (guint i = 0; i < inner->len; i++) {
+            g_string_append_c(rcmd, ' ');
+            append_sh_quoted(rcmd, g_ptr_array_index(inner, i));
+        }
+        g_ptr_array_add(inner, NULL);
+        g_strfreev((char **)g_ptr_array_free(inner, FALSE));
+
+        GPtrArray *ssh_args = g_ptr_array_new();
+        g_ptr_array_add(ssh_args, g_strdup("ssh"));
+        g_ptr_array_add(ssh_args, g_strdup("-tt"));
+        if (remote->ssh_sock && remote->ssh_sock[0] != '\0') {
+            g_ptr_array_add(ssh_args, g_strdup("-S"));
+            g_ptr_array_add(ssh_args, g_strdup(remote->ssh_sock));
+        }
+        g_ptr_array_add(ssh_args, g_strdup("-o"));
+        g_ptr_array_add(ssh_args, g_strdup("BatchMode=yes"));
+        g_ptr_array_add(ssh_args, g_strdup(remote->ssh_target));
+        g_ptr_array_add(ssh_args, g_string_free(rcmd, FALSE));
+        g_ptr_array_add(ssh_args, NULL);
+        return (char **)g_ptr_array_free(ssh_args, FALSE);
+    }
+
+    if (!repo_dir || !*repo_dir) return NULL;
+    GPtrArray *args = g_ptr_array_new();
+    build_script_args(args, repo_dir, action, plan, account, open_app);
     g_ptr_array_add(args, NULL);
     return (char **)g_ptr_array_free(args, FALSE);
 }
@@ -585,7 +672,8 @@ static void on_child_reaped(GPid pid, gint wait_status, gpointer user_data) {
     }
 }
 
-bool runner_spawn(G2yProcess *proc, const char *repo_dir, G2yAction action, G2yPlan plan,
+bool runner_spawn(G2yProcess *proc, const char *repo_dir, const G2yRemoteCfg *remote,
+                  G2yAction action, G2yPlan plan,
                   const char *account, bool open_app,
                   G2yOutputCb on_output, G2yDoneCb on_done, void *user_data,
                   char *err_buf, size_t err_cap) {
@@ -594,7 +682,8 @@ bool runner_spawn(G2yProcess *proc, const char *repo_dir, G2yAction action, G2yP
         return false;
     }
 
-    char **argv = runner_build_argv(repo_dir, action, plan, account, open_app);
+    bool is_remote = has_remote_target(remote);
+    char **argv = runner_build_argv(repo_dir, remote, action, plan, account, open_app);
     if (!argv) {
         if (err_buf && err_cap) snprintf(err_buf, err_cap, "Invalid repository path");
         return false;
@@ -609,7 +698,7 @@ bool runner_spawn(G2yProcess *proc, const char *repo_dir, G2yAction action, G2yP
     GError *gerr = NULL;
 
     gboolean ok = g_spawn_async_with_pipes(
-        repo_dir,
+        is_remote ? NULL : repo_dir,
         argv,
         envp,
         G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
@@ -637,6 +726,7 @@ bool runner_spawn(G2yProcess *proc, const char *repo_dir, G2yAction action, G2yP
     set_nonblocking(err_fd);
 
     proc->running = true;
+    proc->is_remote = is_remote;
     proc->pid = pid;
     proc->stdin_fd = in_fd;
     proc->out_fd = out_fd;
@@ -659,6 +749,10 @@ bool runner_send_enter(G2yProcess *proc) {
 
 void runner_stop(G2yProcess *proc) {
     if (!proc || !proc->running || proc->pid <= 0) return;
+    if (proc->is_remote && proc->stdin_fd >= 0) {
+        ssize_t ignored = write(proc->stdin_fd, "\x03", 1);
+        (void)ignored;
+    }
     kill((pid_t)proc->pid, SIGTERM);
 }
 

@@ -73,7 +73,7 @@ static const char *const G2Y_CSS_BASE =
     "  border: 1px solid #303c52;\n"
     "  border-radius: 8px;\n"
     "  padding: 4px;\n"
-    "  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);\n"
+    "  box-shadow: none;\n"
     "}\n"
     "button.g2y-pop-item {\n"
     "  font-size: 11px;\n"

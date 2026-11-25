@@ -263,12 +263,34 @@ static void sync_controls(G2yUI *ui, bool waiting_enter) {
     gtk_widget_set_sensitive(ui->btn_next, busy && waiting_enter);
 }
 
+static G2yRemoteCfg ui_remote_cfg(const G2yUI *ui) {
+    G2yRemoteCfg cfg = {
+        .ssh_target = ui->ssh_target[0] ? ui->ssh_target : NULL,
+        .ssh_sock = ui->ssh_sock[0] ? ui->ssh_sock : NULL,
+        .remote_repo = ui->remote_repo[0] ? ui->remote_repo : NULL
+    };
+    return cfg;
+}
+
 void ui_refresh_env(G2yUI *ui) {
     if (!ui) return;
-    runner_detect_env(ui->repo_dir, &ui->env);
+    G2yRemoteCfg remote = ui_remote_cfg(ui);
+    runner_detect_env(ui->repo_dir, &remote, &ui->env);
 
     char msg[1100];
-    if (!ui->env.repo_ok) {
+    if (ui->ssh_target[0]) {
+        if (!ui->env.has_venv) {
+            snprintf(msg, sizeof(msg), "ssh %s · tunnel closed · adb %s",
+                     ui->ssh_target, ui->env.has_adb ? "ok" : "none");
+            set_pill(ui, "NO TUNNEL", "g2y-pill-warn");
+        } else {
+            snprintf(msg, sizeof(msg), "ssh -> %s · %s · adb %s",
+                     ui->ssh_target,
+                     ui->ssh_sock[0] ? "mux ok" : "direct",
+                     ui->env.has_adb ? "ok" : "none");
+            if (!ui->proc.running) set_pill(ui, "READY", NULL);
+        }
+    } else if (!ui->env.repo_ok) {
         snprintf(msg, sizeof(msg), "Repo scripts missing under %s", ui->repo_dir);
         set_pill(ui, "NO REPO", "g2y-pill-warn");
     } else if (!ui->env.has_venv) {
@@ -333,7 +355,8 @@ static void launch_action(G2yUI *ui, G2yAction action, const char *title) {
     append_log(ui, banner);
 
     char err[192] = {0};
-    if (!runner_spawn(&ui->proc, ui->repo_dir, action, plan, acct, open_app,
+    G2yRemoteCfg remote = ui_remote_cfg(ui);
+    if (!runner_spawn(&ui->proc, ui->repo_dir, &remote, action, plan, acct, open_app,
                       on_proc_output, on_proc_done, ui, err, sizeof(err))) {
         append_log(ui, "ERR: ");
         append_log(ui, err);
@@ -479,6 +502,10 @@ static GtkWidget *make_btn(const char *label, const char *extra_cls,
 }
 
 G2yUI *ui_create(GtkApplication *app, const char *repo_dir) {
+    return ui_create_ex(app, repo_dir, NULL);
+}
+
+G2yUI *ui_create_ex(GtkApplication *app, const char *repo_dir, const G2yRemoteCfg *remote) {
     G2yUI *ui = calloc(1, sizeof(G2yUI));
     if (!ui) return NULL;
     ui->proc.stdin_fd = -1;
@@ -487,6 +514,24 @@ G2yUI *ui_create(GtkApplication *app, const char *repo_dir) {
 
     const char *src_repo = (repo_dir && *repo_dir) ? repo_dir : G2Y_DEFAULT_REPO;
     snprintf(ui->repo_dir, sizeof(ui->repo_dir), "%s", src_repo);
+    if (remote && remote->ssh_target) {
+        snprintf(ui->ssh_target, sizeof(ui->ssh_target), "%s", remote->ssh_target);
+    }
+    if (remote && remote->ssh_sock) {
+        snprintf(ui->ssh_sock, sizeof(ui->ssh_sock), "%s", remote->ssh_sock);
+    }
+    if (remote && remote->remote_repo) {
+        snprintf(ui->remote_repo, sizeof(ui->remote_repo), "%s", remote->remote_repo);
+    }
+
+    const char *dpy = getenv("DISPLAY");
+    const char *no_anim = getenv("G2Y_NO_ANIM");
+    if ((dpy && strncmp(dpy, "localhost:", 10) == 0) || (no_anim && no_anim[0] == '1')) {
+        GtkSettings *settings = gtk_settings_get_default();
+        if (settings) {
+            g_object_set(settings, "gtk-enable-animations", FALSE, NULL);
+        }
+    }
 
     ui_install_css(NULL);
 
@@ -623,6 +668,8 @@ G2yUI *ui_create(GtkApplication *app, const char *repo_dir) {
     add_class(plans_scroll, "g2y-list-wrap");
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(plans_scroll),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_kinetic_scrolling(GTK_SCROLLED_WINDOW(plans_scroll), FALSE);
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(plans_scroll), FALSE);
     gtk_widget_set_size_request(plans_scroll, -1, 146);
 
     ui->plan_list = gtk_list_box_new();
@@ -638,6 +685,8 @@ G2yUI *ui_create(GtkApplication *app, const char *repo_dir) {
     add_class(scroll, "g2y-console-wrap");
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_kinetic_scrolling(GTK_SCROLLED_WINDOW(scroll), FALSE);
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(scroll), FALSE);
     ui->log_view = gtk_text_view_new();
     add_class(ui->log_view, "g2y-console");
     gtk_text_view_set_editable(GTK_TEXT_VIEW(ui->log_view), FALSE);

@@ -46,6 +46,9 @@ typedef struct {
     GtkWidget     *btn_copy;
 
     char           repo_dir[1024];
+    char           ssh_target[256];
+    char           ssh_sock[512];
+    char           remote_repo[512];
     char           line_acc[1024];
     size_t         line_len;
     G2yEnvStatus   env;
@@ -56,8 +59,11 @@ typedef struct {
 /* Installs embedded GTK3 CSS; returns false if GtkCssProvider reports an error. */
 bool ui_install_css(GtkCssProvider **out_provider);
 
-/* Builds the fixed 420x640 portrait window bound to repo_dir (or default). */
+/* Builds the fixed 420x640 portrait window bound to local repo_dir. */
 G2yUI *ui_create(GtkApplication *app, const char *repo_dir);
+
+/* Builds the fixed 420x640 window with optional remote SSH ControlMaster target. */
+G2yUI *ui_create_ex(GtkApplication *app, const char *repo_dir, const G2yRemoteCfg *remote);
 
 /* Updates header badges from runner_detect_env. */
 void ui_refresh_env(G2yUI *ui);

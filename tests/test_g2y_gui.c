@@ -25,12 +25,12 @@ static void test_plan_options_and_argv(void) {
     assert(runner_plan_from_id("20x") == G2Y_PLAN_ULTRA_20X);
     assert(runner_plan_from_id("unknown") == G2Y_PLAN_ALL);
 
-    char **setup_argv = runner_build_argv("/repo", G2Y_ACTION_SETUP, G2Y_PLAN_ALL, NULL, false);
+    char **setup_argv = runner_build_argv("/repo", NULL, G2Y_ACTION_SETUP, G2Y_PLAN_ALL, NULL, false);
     assert(strcmp(setup_argv[0], "/repo/scripts/setup.sh") == 0);
     assert(setup_argv[1] == NULL);
     g_strfreev(setup_argv);
 
-    char **show_argv = runner_build_argv("/repo", G2Y_ACTION_SHOW_PLANS, G2Y_PLAN_ULTRA_5X, NULL, false);
+    char **show_argv = runner_build_argv("/repo", NULL, G2Y_ACTION_SHOW_PLANS, G2Y_PLAN_ULTRA_5X, NULL, false);
     assert(strcmp(show_argv[0], "/repo/scripts/run.sh") == 0);
     assert(strcmp(show_argv[1], "scan") == 0);
     assert(strcmp(show_argv[2], "query") == 0);
@@ -41,7 +41,7 @@ static void test_plan_options_and_argv(void) {
     assert(show_argv[7] == NULL);
     g_strfreev(show_argv);
 
-    char **plan_argv = runner_build_argv("/repo", G2Y_ACTION_PLAN, G2Y_PLAN_COMBO, "a@b.com", false);
+    char **plan_argv = runner_build_argv("/repo", NULL, G2Y_ACTION_PLAN, G2Y_PLAN_COMBO, "a@b.com", false);
     assert(strcmp(plan_argv[0], "/repo/scripts/run.sh") == 0);
     assert(strcmp(plan_argv[1], "combo") == 0);
     assert(strcmp(plan_argv[2], "plan") == 0);
@@ -51,7 +51,7 @@ static void test_plan_options_and_argv(void) {
     assert(plan_argv[6] == NULL);
     g_strfreev(plan_argv);
 
-    char **run_combo = runner_build_argv("/repo", G2Y_ACTION_RUN, G2Y_PLAN_COMBO, "", true);
+    char **run_combo = runner_build_argv("/repo", NULL, G2Y_ACTION_RUN, G2Y_PLAN_COMBO, "", true);
     assert(strcmp(run_combo[1], "combo") == 0);
     assert(strcmp(run_combo[2], "run") == 0);
     assert(strcmp(run_combo[3], "--device") == 0);
@@ -61,16 +61,39 @@ static void test_plan_options_and_argv(void) {
     assert(run_combo[7] == NULL);
     g_strfreev(run_combo);
 
-    char **run_step = runner_build_argv("/repo", G2Y_ACTION_RUN, G2Y_PLAN_PRO6B, "", false);
+    char **run_step = runner_build_argv("/repo", NULL, G2Y_ACTION_RUN, G2Y_PLAN_PRO6B, "", false);
     assert(strcmp(run_step[1], "step3") == 0);
     assert(run_step[2] == NULL);
     g_strfreev(run_step);
 
-    char **run_ultra = runner_build_argv("/repo", G2Y_ACTION_RUN, G2Y_PLAN_ULTRA_20X, "", false);
+    char **run_ultra = runner_build_argv("/repo", NULL, G2Y_ACTION_RUN, G2Y_PLAN_ULTRA_20X, "", false);
     assert(strcmp(run_ultra[1], "ultra") == 0);
     assert(strcmp(run_ultra[2], "20x") == 0);
     assert(run_ultra[3] == NULL);
     g_strfreev(run_ultra);
+}
+
+static void test_remote_ssh_argv(void) {
+    G2yRemoteCfg remote = {
+        .ssh_target = "root@2.24.0.252",
+        .ssh_sock = "/tmp/g2y-test.sock",
+        .remote_repo = "~/google-ai-pro-2y"
+    };
+    char **argv = runner_build_argv(NULL, &remote, G2Y_ACTION_PLAN, G2Y_PLAN_COMBO, "o'reilly@example.com", false);
+    assert(argv != NULL);
+    assert(strcmp(argv[0], "ssh") == 0);
+    assert(strcmp(argv[1], "-tt") == 0);
+    assert(strcmp(argv[2], "-S") == 0);
+    assert(strcmp(argv[3], "/tmp/g2y-test.sock") == 0);
+    assert(strcmp(argv[4], "-o") == 0);
+    assert(strcmp(argv[5], "BatchMode=yes") == 0);
+    assert(strcmp(argv[6], "root@2.24.0.252") == 0);
+    assert(strstr(argv[7], "cd \"$HOME\"/'google-ai-pro-2y'") != NULL);
+    assert(strstr(argv[7], "ANDROID_ADB_SERVER_PORT='15037'") != NULL);
+    assert(strstr(argv[7], "FRIDA_HOST='127.0.0.1:27042'") != NULL);
+    assert(strstr(argv[7], "'o'\\''reilly@example.com'") != NULL);
+    assert(argv[8] == NULL);
+    g_strfreev(argv);
 }
 
 static void test_plan_line_parser(void) {
@@ -109,12 +132,12 @@ static void test_plan_line_parser(void) {
 
 static void test_detect_real_repo(void) {
     G2yEnvStatus st = {0};
-    runner_detect_env(G2Y_DEFAULT_REPO, &st);
+    runner_detect_env(G2Y_DEFAULT_REPO, NULL, &st);
     assert(st.repo_ok);
     assert(st.has_agent);
 
     G2yEnvStatus missing = {0};
-    runner_detect_env("/nonexistent/repo/path", &missing);
+    runner_detect_env("/nonexistent/repo/path", NULL, &missing);
     assert(!missing.repo_ok);
     assert(!missing.has_venv);
 }
@@ -167,6 +190,7 @@ static void test_ui_portrait_geometry_and_css(void) {
 int main(void) {
     test_ansi_strip();
     test_plan_options_and_argv();
+    test_remote_ssh_argv();
     test_plan_line_parser();
     test_detect_real_repo();
     test_ui_portrait_geometry_and_css();

@@ -11,7 +11,15 @@ make package
 ./dist/g2y-gui
 ```
 
-To target a different clone location: `./dist/g2y-gui --repo /path/to/google-ai-pro-2y` (or set `G2Y_REPO`).
+To target a different local clone: `./dist/g2y-gui --repo /path/to/google-ai-pro-2y` (or set `G2Y_REPO`).
+
+To run the GUI natively at 60 FPS locally while executing scripts on a VPS over an SSH ControlMaster mux + reverse ADB/Frida tunnels:
+
+```sh
+ssh -N -M -S /tmp/g2y-vps.sock -o ExitOnForwardFailure=yes \
+    -R 15037:127.0.0.1:5037 -R 27042:127.0.0.1:27042 root@YOUR_VPS_IP
+./dist/g2y-gui --ssh root@YOUR_VPS_IP --ssh-sock /tmp/g2y-vps.sock --remote-repo ~/google-ai-pro-2y
+```
 
 ## Controls
 
