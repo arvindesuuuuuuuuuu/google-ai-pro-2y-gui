@@ -18,7 +18,7 @@ To run the GUI natively at 60 FPS locally while executing scripts on a VPS over 
 ```sh
 ssh -N -M -S /tmp/g2y-vps.sock -o ExitOnForwardFailure=yes \
     -R 15037:127.0.0.1:5037 -R 27042:127.0.0.1:27042 root@YOUR_VPS_IP
-./dist/g2y-gui --ssh root@YOUR_VPS_IP --ssh-sock /tmp/g2y-vps.sock --remote-repo ~/google-ai-pro-2y
+./dist/g2y-gui --ssh root@YOUR_VPS_IP --ssh-sock /tmp/g2y-vps.sock --remote-repo google-ai-pro-2y
 ```
 
 ## Controls
